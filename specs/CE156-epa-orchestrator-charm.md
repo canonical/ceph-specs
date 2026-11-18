@@ -28,51 +28,22 @@ This spec adds four things to the charm:
 - a notification on that relation each time the snap or its configuration has
   been applied on a unit.
 
-ceph-osd is the first consumer. Its side of the relation is already
-implemented and stops installing or configuring the snap itself.
-
 ## Rationale
 
-The EPA orchestrator is one daemon per host that several workloads share, so
-one charm should own it. It records which logical CPUs each client holds: Nova
-and OVS-DPDK claim from the `isolated` pool, ceph-osd claims from the `general`
-pool.
+The EPA orchestrator is one daemon per host that several workloads share. It
+records which logical CPUs each client holds: Nova and OVS-DPDK claim from its
+`isolated` pool, ceph-osd from its `general` pool. A shared host service needs
+one owner, and its pool has to be sized for all clients together, which no
+single client can do.
 
-The ceph-osd prototype installed the snap itself, from a charm resource or a
-channel option, and grew the general pool to fit its own demand. That has
-three problems:
-
-- **Two owners of one snap.** On a host that also runs the EPA charm, both
-  charms decide the snap's channel and revision and both restart its daemon.
-- **Pool sizing is a host decision.** The general pool has to cover every
-  client on the host and leave CPUs for the host itself. ceph-osd only knows
-  its own demand, so its sizing was a guess about everyone else, capped at 75%
-  of the host's CPUs.
-- **Duplicated lifecycle code.** Snap installation, refresh policy and health
-  checks already exist in the EPA charm.
-
-The EPA charm cannot take over today, for three reasons this spec addresses:
+The epa-orchestrator charm is that owner, but it falls short in three ways:
 
 - **It only deploys with Sunbeam.** Its single container relation is
-  `sunbeam-machine`, and that relation is mandatory. A Ceph host without
-  Sunbeam has no principal to attach it to.
+  `sunbeam-machine`, and that relation is mandatory.
 - **It cannot configure a pool.** The snap's `cpu-pool` setting has no charm
-  option, and a pool change needs a daemon restart that the charm never
-  performs.
-- **Consumers cannot tell when it is ready.** Juju gives a ceph-osd unit no
-  event when the snap on its own host becomes usable or its pool changes. A
-  unit that found no daemon, or too small a pool, would stay waiting or
-  degraded until someone changes an unrelated option.
-
-A regular (global) relation between the EPA charm and its consumers, rather
-than a container relation to each consumer, keeps the charm at one unit per
-host. A subordinate gets one unit per related principal unit, so attaching it
-to ceph-osd and to a second consumer on the same host would put two units in
-charge of the same snap.
-
-The notification goes over relation data because the alternative is polling.
-ceph-osd's `update-status` hook only observes; it never allocates CPUs or
-restarts OSDs, and that should stay so.
+  option, and the charm never restarts the daemon, which a pool change needs.
+- **Consumers cannot tell when it is ready.** Juju gives a consumer unit no
+  event when the snap on its own host becomes usable or its pool changes.
 
 ## Specification
 
@@ -239,8 +210,8 @@ were waiting retry.
   unrelated.
 - **Isolated-pool clients** are unaffected by a general pool. Requests without
   a `pool` selector keep using the isolated pool.
-- **ceph-osd** needs no migration. Its charm-installed snap was never
-  released.
+- **ceph-osd** needs no migration. No released ceph-osd charm installs or
+  configures the snap itself.
 - **Snap version.** Pool support is in the snap's `2026.1/edge`, `2026.1/beta`
   and `2026.2/edge` channels (as of 2026-11-18), and in no stable channel. The
   charm's default channel, `2025.1/edge`, does not have it; there a non-empty
@@ -264,10 +235,8 @@ were waiting retry.
 
 - **Snap channel.** Which channel becomes the charm's default `snap-channel`?
   Pool support is only published to edge and beta channels so far.
-- **Hosts with different CPU layouts.** Is one application per hardware class
-  acceptable, or does the charm need a per-host form, for example a map keyed
-  by hostname or an expression such as "all but the first N CPUs per NUMA
-  node"?
+- **Hosts with different CPU layouts.** Suggest one application per hardware
+  class, is that acceptable?
 - **Two units on one host.** Is documenting the one-principal rule enough, or
   should a second unit detect the first and block?
 - **Richer relation data.** Should the provider also publish its hostname,
@@ -286,7 +255,6 @@ were waiting retry.
 - Kernel CPU isolation. A general pool is accounting only; nothing keeps other
   host processes off its CPUs.
 - Changes to isolated-pool clients such as Nova and OVS-DPDK.
-- An EPA integration variable in the ceph-charms Terraform module.
 
 ### Alternatives considered
 
